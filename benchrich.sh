@@ -1,0 +1,1 @@
+python tools/train.py global/task=gvhmr/test_rich exp=gvhmr/mixed/mixed ckpt_path=inputs/checkpoints/gvhmr/gvhmr_siga24_release.ckpt

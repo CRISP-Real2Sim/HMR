@@ -27,6 +27,7 @@ colors_str_map = {
 
 
 def overlay_image_onto_background(image, mask, bbox, background):
+
     if isinstance(image, torch.Tensor):
         image = image.detach().cpu().numpy()
     if isinstance(mask, torch.Tensor):
@@ -35,10 +36,26 @@ def overlay_image_onto_background(image, mask, bbox, background):
     out_image = background.copy()
     bbox = bbox[0].int().cpu().numpy().copy()
     roi_image = out_image[bbox[1] : bbox[3], bbox[0] : bbox[2]]
-
+    
     roi_image[mask] = image[mask]
     out_image[bbox[1] : bbox[3], bbox[0] : bbox[2]] = roi_image
 
+    return out_image
+
+def overlay_depth_onto_background(image, mask, bbox, background):
+
+    if isinstance(image, torch.Tensor):
+        image = image.detach().cpu().numpy()
+    if isinstance(mask, torch.Tensor):
+        mask = mask.detach().cpu().numpy()
+    background = np.zeros(background[..., 0].shape)
+    out_image = background.copy()
+    bbox = bbox[0].int().cpu().numpy().copy()
+
+    print(background.shape, image.shape, mask.shape)
+    roi_image = out_image[bbox[1] : bbox[3], bbox[0] : bbox[2]]
+    roi_image[mask] = image[mask]
+    out_image[bbox[1] : bbox[3], bbox[0] : bbox[2]] = roi_image
     return out_image
 
 
@@ -102,6 +119,18 @@ def compute_bbox_from_points(X, img_w, img_h, scaleFactor=1.2):
     return bbox
 
 
+import torch.nn as nn
+class MeshRendererWithDepth(nn.Module):
+    def __init__(self, rasterizer, shader):
+        super().__init__()
+        self.rasterizer = rasterizer
+        self.shader = shader
+
+    def forward(self, meshes_world, **kwargs) -> torch.Tensor:
+        fragments = self.rasterizer(meshes_world, **kwargs)
+        images = self.shader(fragments, meshes_world, **kwargs)
+        return images, fragments.zbuf
+
 class Renderer:
     def __init__(self, width, height, focal_length=None, device="cuda", faces=None, K=None, bin_size=None):
         """set bin_size to 0 for no binning"""
@@ -119,9 +148,22 @@ class Renderer:
         self.initialize_camera_params(focal_length, K)
         self.lights = PointLights(device=device, location=[[0.0, 0.0, -10.0]])
         self.create_renderer()
+        self.create_depth_renderer()
 
     def create_renderer(self):
         self.renderer = MeshRenderer(
+            rasterizer=MeshRasterizer(
+                raster_settings=RasterizationSettings(
+                    image_size=self.image_sizes[0], blur_radius=1e-5, bin_size=self.bin_size
+                ),
+            ),
+            shader=SoftPhongShader(
+                device=self.device,
+                lights=self.lights,
+            ),
+        )
+    def create_depth_renderer(self):
+        self.depth_renderer = MeshRendererWithDepth(
             rasterizer=MeshRasterizer(
                 raster_settings=RasterizationSettings(
                     image_size=self.image_sizes[0], blur_radius=1e-5, bin_size=self.bin_size
@@ -194,6 +236,7 @@ class Renderer:
         self.K_full, self.image_sizes = update_intrinsics_from_bbox(self.K, bbox)
         self.cameras = self.create_camera()
         self.create_renderer()
+        self.create_depth_renderer()
 
     def reset_bbox(
         self,
@@ -206,6 +249,7 @@ class Renderer:
         self.K_full, self.image_sizes = update_intrinsics_from_bbox(self.K, bbox)
         self.cameras = self.create_camera()
         self.create_renderer()
+        self.create_depth_renderer()
 
     def render_mesh(self, vertices, background=None, colors=[0.8, 0.8, 0.8], VI=50):
         self.update_bbox(vertices[::VI], scale=1.2)
@@ -230,16 +274,53 @@ class Renderer:
 
         materials = Materials(device=self.device, specular_color=(colors,), shininess=0)
 
-        results = torch.flip(self.renderer(mesh, materials=materials, cameras=self.cameras, lights=self.lights), [1, 2])
+        #results = self.renderer(mesh, cameras=cameras, lights=lights, materials=materials)
+        #image = (results[0, ..., :3].cpu().numpy() * 255).astype(np.uint8)
+        results=self.renderer(mesh, materials=materials, cameras=self.cameras, lights=self.lights)
+        results = torch.flip(results, [1, 2])
         image = results[0, ..., :3] * 255
         mask = results[0, ..., -1] > 1e-3
 
         if background is None:
             background = np.ones((self.height, self.width, 3)).astype(np.uint8) * 255
-
+        print(image.shape, mask.shape)
         image = overlay_image_onto_background(image, mask, self.bboxes, background.copy())
         self.reset_bbox()
         return image
+
+    def render_mesh_depth(self, vertices, background=None, colors=[0.8, 0.8, 0.8], VI=50):
+        self.update_bbox(vertices[::VI], scale=1.2)
+        vertices = vertices.unsqueeze(0)
+
+        if isinstance(colors, torch.Tensor):
+            # per-vertex color
+            verts_features = colors.to(device=vertices.device, dtype=vertices.dtype)
+            colors = [0.8, 0.8, 0.8]
+        else:
+            if colors[0] > 1:
+                colors = [c / 255.0 for c in colors]
+            verts_features = torch.tensor(colors).reshape(1, 1, 3).to(device=vertices.device, dtype=vertices.dtype)
+            verts_features = verts_features.repeat(1, vertices.shape[1], 1)
+        textures = TexturesVertex(verts_features=verts_features)
+
+        mesh = Meshes(
+            verts=vertices,
+            faces=self.faces,
+            textures=textures,
+        )
+
+        materials = Materials(device=self.device, specular_color=(colors,), shininess=0)
+
+        results, depth_results=self.depth_renderer(mesh, materials=materials, cameras=self.cameras, lights=self.lights)
+        results = torch.flip(results, [1, 2])
+
+        depth_results = torch.flip(depth_results, [1, 2])
+        depth = depth_results[0, ..., 0]
+        mask = depth > 0.0
+        depth = overlay_depth_onto_background(depth, mask, self.bboxes, background=background)
+        self.reset_bbox()
+        return depth
+    
 
     def render_with_ground(self, verts, colors, cameras, lights, faces=None):
         """
@@ -269,10 +350,14 @@ class Renderer:
 
         materials = Materials(device=self.device, shininess=0)
 
-        results = self.renderer(mesh, cameras=cameras, lights=lights, materials=materials)
-        image = (results[0, ..., :3].cpu().numpy() * 255).astype(np.uint8)
-
-        return image
+        #results = self.renderer(mesh, cameras=cameras, lights=lights, materials=materials)
+        #image = (results[0, ..., :3].cpu().numpy() * 255).astype(np.uint8)
+        results = self.depth_renderer(mesh, cameras=cameras, lights=lights, materials=materials)
+        # results = self.renderer(mesh, cameras=cameras, lights=lights, materials=materials)
+        image = (results[0][0, ..., :3].cpu().numpy() * 255).astype(np.uint8)
+        depth = (results[-1][0, ..., 0]).cpu().numpy() # * 255
+    
+        return image, depth
 
 
 def create_meshes(verts, faces, colors):
