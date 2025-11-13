@@ -137,11 +137,25 @@ def parse_args_to_cfg():
     Log.info(f"[Copy Video] {video_path} -> {cfg.video_path}")
     #if not Path(cfg.video_path).exists() or get_video_lwh(video_path)[0] != get_video_lwh(cfg.video_path)[0]:
     reader = get_video_reader(video_path)
-    writer = get_writer(cfg.video_path, fps=30, crf=CRF)
-    for img in tqdm(reader, total=get_video_lwh(video_path)[0], desc=f"Copy"):
-        writer.write_frame(img)
+
+    # Force imageio-ffmpeg and set a valid fps so time_base is defined.
+    writer = imageio.get_writer(
+        str(cfg.video_path),
+        format="ffmpeg",
+        fps=30,
+        codec="libx264",
+        macro_block_size=1
+    )
+
+    for img in tqdm(reader, total=get_video_lwh(video_path)[0], desc="Copy"):
+        # Ensure uint8 RGB. If your reader yields BGR (OpenCV), convert:
+        if img.ndim == 3 and img.shape[2] == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        writer.append_data(img)
+
     writer.close()
     reader.close()
+
 
     return cfg
 
