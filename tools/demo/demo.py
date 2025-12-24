@@ -148,9 +148,7 @@ def parse_args_to_cfg():
     )
 
     for img in tqdm(reader, total=get_video_lwh(video_path)[0], desc="Copy"):
-        # Ensure uint8 RGB. If your reader yields BGR (OpenCV), convert:
-        if img.ndim == 3 and img.shape[2] == 3:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # imageio/pyav already returns RGB, so write directly to avoid swapping channels
         writer.append_data(img)
 
     writer.close()
@@ -243,24 +241,11 @@ def load_data_dict(cfg):
     paths = cfg.paths
     length, width, height = get_video_lwh(cfg.video_path)
 
-    
-    '''if cfg.static_cam:
-        R_w2c = torch.eye(3).repeat(length, 1, 1)
-    else:
-        traj = torch.load(cfg.paths.slam)
-        if cfg.use_dpvo:  # DPVO
-            traj_quat = torch.from_numpy(traj[:, [6, 3, 4, 5]])
-            R_w2c = quaternion_to_matrix(traj_quat).mT
-        else:  # SimpleVO
-            R_w2c = torch.from_numpy(traj[:, :3, :3])
-    if cfg.f_mm is not None:
-        K_fullimg = create_camera_sensor(width, height, cfg.f_mm)[2].repeat(length, 1, 1)
-    else:
-        K_fullimg = estimate_K(width, height).repeat(length, 1, 1)'''
-    
     seq = cfg.tgt_name
-    base_folder = '/data3/zihanwa3/_Robotics/_vision/tram/megasamra'# 449_resize/camera.npy
-    camera = np.load(f'{base_folder}/{seq}/camera.npy', allow_pickle=True).item()
+    repo_root = Path(__file__).resolve().parents[4]
+    base_folder = repo_root / 'results' / 'init' / 'vslam' / 'megacam'
+    camera_path = base_folder / seq / 'camera.npy'
+    camera = np.load(camera_path, allow_pickle=True).item()
     img_focal = camera['img_focal']
     img_center = camera['img_center']
     #print(f'{base_folder}/{seq}/camera.npy')
