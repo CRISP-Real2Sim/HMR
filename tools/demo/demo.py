@@ -242,9 +242,15 @@ def load_data_dict(cfg):
     length, width, height = get_video_lwh(cfg.video_path)
 
     seq = cfg.tgt_name
-    repo_root = Path(__file__).resolve().parents[4]
-    base_folder = repo_root / 'results' / 'init' / 'vslam' / 'megacam'
-    camera_path = base_folder / seq / 'camera.npy'
+    from pathlib import Path
+
+    REPO_ROOT = Path(__file__).resolve().parents[4]  # demo.py -> demo -> tools -> HMR -> prep -> CRISP-Real2Sim
+    base_folder = REPO_ROOT / "results" / "init" / "vslam" / "megacam"
+    camera_path = base_folder / cfg.tgt_name / "camera.npy"
+
+    print("camera_path =", camera_path)
+    print("exists =", camera_path.exists())
+
     camera = np.load(camera_path, allow_pickle=True).item()
     img_focal = camera['img_focal']
     img_center = camera['img_center']

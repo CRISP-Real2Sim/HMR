@@ -10,7 +10,7 @@ from time import time
 
 from hmr4d import PROJ_ROOT
 
-
+# prep/HMR/inputs/checkpoints/body_models/smplx
 class SmplxLite(nn.Module):
     def __init__(
         self,
