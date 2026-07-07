@@ -3,6 +3,7 @@ import torch
 import pytorch_lightning as pl
 import numpy as np
 import argparse
+import os
 from hmr4d.utils.pylogger import Log
 import hydra
 from hydra import initialize_config_module, compose
@@ -87,6 +88,7 @@ def parse_args_to_cfg():
     parser.add_argument("--video", type=str, default="inputs/demo/dance_3.mp4")
     parser.add_argument("--tgt_name", type=str, default="inputs/demo/dance_3.mp4")
     parser.add_argument("--output_root", type=str, default=None, help="by default to outputs/demo")
+    parser.add_argument("--camera_root", type=str, default=None, help="Camera root containing <sequence>/camera.npy")
     parser.add_argument("-s", "--static_cam", action="store_true", help="If true, skip DPVO")
     parser.add_argument("--use_dpvo", action="store_true", help="If true, use DPVO. By default not using DPVO.")
     parser.add_argument(
@@ -127,6 +129,9 @@ def parse_args_to_cfg():
             overrides.append(f"output_root={args.output_root}")
         register_store_gvhmr()
         cfg = compose(config_name="demo", overrides=overrides)
+        camera_root = args.camera_root or os.environ.get("HMR_CAMERA_ROOT") or os.environ.get("SCENE_CAMERA_ROOT")
+        if camera_root:
+            os.environ["HMR_CAMERA_ROOT"] = camera_root
 
     # Output
     Log.info(f"[Output Dir]: {cfg.output_dir}")
@@ -245,7 +250,8 @@ def load_data_dict(cfg):
     from pathlib import Path
 
     REPO_ROOT = Path(__file__).resolve().parents[4]  # demo.py -> demo -> tools -> HMR -> prep -> CRISP-Real2Sim
-    base_folder = REPO_ROOT / "results" / "init" / "vslam" / "megacam"
+    camera_root = os.environ.get("HMR_CAMERA_ROOT") or os.environ.get("SCENE_CAMERA_ROOT")
+    base_folder = Path(camera_root) if camera_root else REPO_ROOT / "results" / "init" / "vslam" / "megacam"
     camera_path = base_folder / cfg.tgt_name / "camera.npy"
 
     print("camera_path =", camera_path)
@@ -274,7 +280,6 @@ def load_data_dict(cfg):
     }
     return data
 
-import os 
 def render_incam(cfg):
     incam_video_path = Path(cfg.paths.incam_video)
     pred = torch.load(cfg.paths.hmr4d_results)
